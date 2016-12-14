@@ -9,8 +9,9 @@ defmodule LoggerFileBackend do
   @type inode     :: File.Stat.t
   @type format    :: String.t
   @type level     :: Logger.level
+  @type file_size :: Integer
+  @type file_count:: Integer
   @type metadata  :: [atom]
-
 
   @default_format "$time $metadata[$level] $message\n"
 
@@ -42,7 +43,6 @@ defmodule LoggerFileBackend do
     {:ok, state}
   end
 
-
   # helpers
 
   defp log_event(_level, _msg, _ts, _md, %{path: nil} = state) do
@@ -58,8 +58,8 @@ defmodule LoggerFileBackend do
     end
   end
 
-  defp log_event(level, msg, ts, md, %{path: path, io_device: io_device, inode: inode} = state) when is_binary(path) do
-    if !is_nil(inode) and inode == get_inode(path) do
+  defp log_event(level, msg, ts, md, %{path: path, io_device: io_device, inode: inode, file_size: file_size, file_count: file_count} = state) when is_binary(path) do
+    if !is_nil(inode) and inode == get_inode(path) and size_check(path,file_size) do
       output = format_event(level, msg, ts, md, state)
       try do
         IO.write(io_device, output)
@@ -76,10 +76,10 @@ defmodule LoggerFileBackend do
       end
     else
       File.close(io_device)
+      shift_file(path, file_count-1)
       log_event(level, msg, ts, md, %{state | io_device: nil, inode: nil})
     end
   end
-
 
   defp open_log(path) do
     case (path |> Path.dirname |> File.mkdir_p) do
@@ -92,6 +92,21 @@ defmodule LoggerFileBackend do
     end
   end
 
+  defp size_check(path, file_size) do
+    case File.stat(path) do
+      {:ok, %File.Stat{size: size}} ->
+        if file_size != -1 and file_size <= size do false else true end
+    end
+  end
+
+  defp shift_file(path, cur) do
+    if 0 <= cur do
+      file_name = if cur > 0 do path <> "." <> to_string(cur) else path end
+      File.rename(file_name, path <> "." <> to_string(cur+1))
+      shift_file(path, cur-1)
+    end
+    {:ok}
+  end
 
   defp format_event(level, msg, ts, md, %{format: format, metadata: keys}) do
     Logger.Formatter.format(format, level, msg, ts, take_metadata(md, keys))
@@ -132,7 +147,7 @@ defmodule LoggerFileBackend do
 
 
   defp configure(name, opts) do
-    state = %{name: nil, path: nil, io_device: nil, inode: nil, format: nil, level: nil, metadata: nil, metadata_filter: nil}
+    state = %{name: nil, path: nil, io_device: nil, inode: nil, format: nil, level: nil, metadata: nil, metadata_filter: nil, file_size: nil, file_count: nil}
     configure(name, opts, state)
   end
 
@@ -146,9 +161,11 @@ defmodule LoggerFileBackend do
     format_opts     = Keyword.get(opts, :format, @default_format)
     format          = Logger.Formatter.compile(format_opts)
     path            = Keyword.get(opts, :path)
+    file_size       = Keyword.get(opts, :file_size, -1)
+    file_count      = Keyword.get(opts, :file_count, 10) 
     metadata_filter = Keyword.get(opts, :metadata_filter)
 
-    %{state | name: name, path: path, format: format, level: level, metadata: metadata, metadata_filter: metadata_filter}
+    %{state | name: name, path: path, format: format, level: level, metadata: metadata, metadata_filter: metadata_filter, file_size: file_size, file_count: file_count}
   end
 
   @replacement "�"
