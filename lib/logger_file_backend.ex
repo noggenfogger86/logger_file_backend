@@ -96,6 +96,8 @@ defmodule LoggerFileBackend do
     case File.stat(path) do
       {:ok, %File.Stat{size: size}} ->
         if file_size != -1 and file_size <= size do false else true end
+      {:error, :enoent} ->
+        false
     end
   end
 
